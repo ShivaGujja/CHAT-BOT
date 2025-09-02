@@ -25,16 +25,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
+# --------------------
+# 2. Load company data
+# --------------------
 try:
     script_dir = Path(__file__).parent
     file_path = script_dir / "RAGdoc1" / "data" / "inter.txt"
 
     loader = TextLoader(str(file_path), encoding="utf-8")
     docs = loader.load()
-
 except FileNotFoundError:
-    raise RuntimeError(f" ERROR: inter.txt not found at {file_path}. Check file path.")
+    raise RuntimeError(f"❌ ERROR: inter.txt not found at {file_path}. Check file path!")
 
 text_splitter = RecursiveCharacterTextSplitter(
     chunk_size=1000, chunk_overlap=200, add_start_index=True
@@ -47,38 +48,53 @@ vector_store.add_documents(all_splits)
 
 llm = ChatOllama(model="mistral")
 
+
+response_cache = {}  
+
 class Query(BaseModel):
     question: str
 
 
 def get_rag_response(question: str) -> str:
-    """Searches vector store and generates a concise answer."""
+    """Searches vector store and generates a concise answer, with caching."""
+
+    if question.lower() in response_cache:
+        print(f"⚡ Cache hit for: {question}")
+        return response_cache[question.lower()]
+
+    
     results = vector_store.similarity_search(question, k=3)
     context = "\n".join([doc.page_content for doc in results])
 
-    prompt = prompt = f"""
+    prompt = f"""
 You are a Q&A system for Interas Labs. 
 Rules:
 - ONLY use information from the context to answer.
-- make this  strict(If the question is out of context or has no answer in the context, say: "I don't have information on that.")
+- If the question is out of context or has no answer in the context, say: "I don't have information on that."
 - Do NOT include greetings, politeness, or extra commentary.
-- Reply in ONE factual, as concise as possible sentence only.
+- Reply in ONE factual, concise sentence only.
+- 
 
 Context:
 {context}
 
+Detect the language in which the question is
 Question:
 {question}
 
-    Answer in a clear, single sentence.
+Answer in same language detected in question in a clear, single sentence.
     """
 
     answer = llm.invoke(prompt)
-    return answer.content if hasattr(answer, "content") else str(answer)
+    final_answer = answer.content if hasattr(answer, "content") else str(answer)
 
-# --------------------
-# 5. API Endpoints
-# --------------------
+    
+    response_cache[question.lower()] = final_answer
+    print(f"✅ Cached response for: {question}")
+
+    return final_answer
+
+
 @app.post("/chat")
 def chat_post(query: Query):
     """Frontend sends a POST request with JSON {question: "..."}"""
